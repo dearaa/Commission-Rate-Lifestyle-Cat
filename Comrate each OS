@@ -1,0 +1,413 @@
+SELECT
+	skud.vender_id shop_id,
+	skud.shop_name,
+	skud.item_first_cate_name_en,
+	skud.item_second_cate_name_en,
+	skud.item_third_cate_name_en,
+	skud.item_third_cate_cd,
+	CASE
+		WHEN
+			(
+				rebate3 IS NULL
+				OR rebate3 = - 300
+			)
+			AND
+			(
+				rebate2 IS NULL
+				OR rebate2 = - 300
+			)
+		THEN(reb_def.def_rate / 100)
+		WHEN
+			(
+				rebate3 IS NOT NULL
+				AND rebate3 <> - 300
+			)
+		THEN rebate3 / 100
+		WHEN
+			(
+				rebate2 IS NOT NULL
+				AND rebate2 <> - 300
+			)
+		THEN rebate2 / 100
+	END com_rate
+	--  rebate3 / 100 com_rate_set,
+	--  reb_def.def_rate / 100 default_rate
+FROM
+	(
+		SELECT DISTINCT
+			sku.vender_id,
+			sku.shop_name,
+			sku.item_second_cate_cd,
+			item_first_cate_name_en,
+			item_second_cate_name_en,
+			sku.item_third_cate_cd,
+			sku.item_third_cate_name_en,
+			psc.belong_area,
+			sku.dt,
+			vbc.best_combo_shop
+		FROM
+			(
+				SELECT DISTINCT
+					vender_id,
+					shop_name,
+					item_first_cate_name_en,
+					item_second_cate_name_en,
+					item_second_cate_cd,
+					item_third_cate_cd,
+					item_third_cate_name_en,
+					otc_tm,
+					dt
+				FROM
+					gdm.gdm_m03_glb_item_sku_da
+				WHERE
+					dt = sysdate( - 1)
+					AND vender_id <> 1
+					--and otc_tm is not null
+					--  and sku_status_cd in (1, 0)
+					--and item_first_cate_cd = '75061132'
+			)
+			sku
+		LEFT OUTER JOIN
+			(
+				SELECT
+					vender_id,
+					value_content belong_area
+				FROM
+					fdm.fdm_popvender_vender_dynamic_subject_chain
+				WHERE
+					dp = 'ACTIVE'
+					AND attribute_key = 'belongArea'
+			)
+			psc
+		ON
+			sku.vender_id = psc.vender_id
+		LEFT JOIN
+			(
+				SELECT
+					vender_id,
+					value_content best_combo_shop
+				FROM
+					fdm.fdm_popvender_vender_dynamic_subject_chain
+				WHERE
+					dp = 'ACTIVE'
+					AND attribute_key = 'bestComboShop'
+			)
+			vbc
+		ON
+			sku.vender_id = vbc.vender_id
+		LEFT OUTER JOIN
+			(
+				SELECT shop_id, category_1 FROM dev.shop_id_os
+			)
+			os
+		ON
+			os.shop_id = sku.vender_id
+		WHERE
+			os.category_1 IS NOT NULL
+			AND os.category_1 IN('Beauty', 'Clothes, Shoes, & Accessories', 'Sports, Hobbies & Outdoor')
+			AND
+			(
+				best_combo_shop = 2
+				OR best_combo_shop = NULL
+				OR best_combo_shop IS NULL
+				OR best_combo_shop = ''
+				OR LENGTH(best_combo_shop) = 0
+			)
+	)
+	skud
+LEFT JOIN
+	(
+		SELECT
+			ord3.*,
+			reb3.rate rebate3
+		FROM
+			(
+				SELECT DISTINCT
+					vender_id,
+					item_first_cate_name_en,
+					item_second_cate_cd,
+					item_second_cate_name_en,
+					item_third_cate_cd,
+					item_third_cate_name_en,
+					dt
+				FROM
+					gdm.gdm_m03_glb_item_sku_da
+				WHERE
+					dt = sysdate( - 1)
+					AND vender_id <> 1
+			)
+			ord3
+		LEFT JOIN
+			(
+				SELECT
+					a.vender_id,
+					a.category_id,
+					a.effect_time AS begin_time,
+					a.rate AS rate,
+					MIN(b.effect_time) AS end_time --create a minium effect time column as end_time for rate period
+				FROM
+					fdm.fdm_popvender_vender_version_rate_chain a
+				LEFT JOIN fdm.fdm_popvender_vender_version_rate_chain b
+				ON
+					a.vender_id = b.vender_id
+					AND a.category_id = b.category_id
+					AND b.dp = 'ACTIVE'
+				WHERE
+					a.dp = 'ACTIVE'
+					AND b.effect_time > a.effect_time
+				GROUP BY
+					a.vender_id,
+					a.category_id,
+					a.effect_time,
+					a.rate
+				
+				UNION ALL
+				
+				SELECT
+					vender_id,
+					category_id,
+					begin_time,
+					rate,
+					end_time
+				FROM
+					(
+						SELECT
+							row_number() over(partition BY vender_id, category_id order by effect_time DESC) AS rank,
+							a.vender_id,
+							a.category_id,
+							a.effect_time AS begin_time,
+							a.rate AS rate,
+							'4721-01-01 00:00:00.0' AS end_time
+						FROM
+							fdm.fdm_popvender_vender_version_rate_chain a
+						WHERE
+							a.dp = 'ACTIVE'
+					) AS a
+				WHERE
+					rank = 1
+			)
+			reb3 ON ord3.item_third_cate_cd = reb3.category_id
+			AND ord3.vender_id = reb3.vender_id
+		WHERE
+			ord3.dt BETWEEN reb3.begin_time AND reb3.end_time
+	)
+	rc3 ON skud.vender_id = rc3.vender_id
+	AND skud.item_third_cate_cd = rc3.item_third_cate_cd
+LEFT JOIN
+	(
+		SELECT
+			ord2.*,
+			reb2.rate rebate2
+		FROM
+			(
+				SELECT DISTINCT
+					vender_id,
+					item_first_cate_name_en,
+					item_second_cate_cd,
+					item_second_cate_name_en,
+					item_third_cate_cd,
+					item_third_cate_name_en,
+					dt
+				FROM
+					gdm.gdm_m03_glb_item_sku_da
+				WHERE
+					dt = sysdate( - 1)
+					AND vender_id <> 1
+			)
+			ord2
+		LEFT JOIN
+			(
+				SELECT
+					a.vender_id,
+					a.category_id,
+					a.effect_time AS begin_time,
+					a.rate AS rate,
+					MIN(b.effect_time) AS end_time
+				FROM
+					fdm.fdm_popvender_vender_version_rate_chain a
+				LEFT JOIN fdm.fdm_popvender_vender_version_rate_chain b
+				ON
+					a.vender_id = b.vender_id
+					AND a.category_id = b.category_id
+					AND b.dp = 'ACTIVE'
+				WHERE
+					a.dp = 'ACTIVE'
+					AND b.effect_time > a.effect_time
+				GROUP BY
+					a.vender_id,
+					a.category_id,
+					a.effect_time,
+					a.rate
+				
+				UNION ALL
+				
+				SELECT
+					vender_id,
+					category_id,
+					begin_time,
+					rate,
+					end_time
+				FROM
+					(
+						SELECT
+							row_number() over(partition BY vender_id, category_id order by effect_time DESC) AS rank,
+							a.vender_id,
+							a.category_id,
+							a.effect_time AS begin_time,
+							a.rate AS rate,
+							'4721-01-01 00:00:00.0' AS end_time
+						FROM
+							fdm.fdm_popvender_vender_version_rate_chain a
+						WHERE
+							a.dp = 'ACTIVE'
+					) AS a
+				WHERE
+					rank = 1
+			)
+			reb2 ON ord2.item_second_cate_cd = reb2.category_id
+			AND ord2.vender_id = reb2.vender_id
+		WHERE
+			ord2.dt BETWEEN reb2.begin_time AND reb2.end_time
+	)
+	rc2 ON skud.vender_id = rc2.vender_id
+	AND skud.item_second_cate_cd = rc2.item_second_cate_cd
+LEFT JOIN
+	(
+		SELECT
+			CASE
+				WHEN a.belong_area = 700
+				THEN 1 --for mp
+				WHEN a.belong_area = 701
+				THEN 2 --for cb
+			END AS belong_area,
+			a.category_id,
+			a.effect_time AS begin_time,
+			a.point AS def_rate,
+			MIN(b.effect_time) AS end_time
+		FROM
+			(
+				SELECT
+					cat.category_id,
+					col_type AS belong_area,
+					effect_time,
+					point
+				FROM
+					fdm.fdm_popvender_shop_category_config_chain cat
+				LEFT OUTER JOIN
+					(
+						SELECT
+							config_id,
+							col_type,
+							effect_time,
+							point
+						FROM
+							fdm.fdm_popvender_shop_category_version_cost_chain
+						WHERE
+							dp = 'ACTIVE'
+					)
+					con
+				ON
+					cat.id = config_id
+				WHERE
+					cat.dp = 'ACTIVE'
+					AND YEAR(con.effect_time) >= 2015
+			)
+			a
+		LEFT JOIN
+			(
+				SELECT
+					cat.category_id,
+					col_type AS belong_area,
+					effect_time,
+					point
+				FROM
+					fdm.fdm_popvender_shop_category_config_chain cat
+				LEFT OUTER JOIN
+					(
+						SELECT
+							config_id,
+							col_type,
+							effect_time,
+							point
+						FROM
+							fdm.fdm_popvender_shop_category_version_cost_chain
+						WHERE
+							dp = 'ACTIVE'
+					)
+					con
+				ON
+					cat.id = config_id
+				WHERE
+					cat.dp = 'ACTIVE'
+					AND YEAR(con.effect_time) >= 2015
+			)
+			b ON a.belong_area = b.belong_area
+			AND a.category_id = b.category_id
+		WHERE
+			b.effect_time > a.effect_time
+		GROUP BY
+			a.belong_area,
+			a.category_id,
+			a.effect_time,
+			a.point
+		
+		UNION ALL
+		
+		SELECT
+			CASE
+				WHEN belong_area = 700
+				THEN 1 --for mp
+				WHEN belong_area = 701
+				THEN 2 --for cb
+			END AS belong_area,
+			category_id,
+			begin_time,
+			rate,
+			end_time
+		FROM
+			(
+				SELECT
+					row_number() over(partition BY belong_area, category_id order by effect_time DESC) AS rank,
+					a.belong_area,
+					a.category_id,
+					a.effect_time AS begin_time,
+					a.point AS rate,
+					'4721-01-01 00:00:00.0' AS end_time
+				FROM
+					(
+						SELECT
+							cat.category_id,
+							col_type AS belong_area,
+							effect_time,
+							point
+						FROM
+							fdm.fdm_popvender_shop_category_config_chain cat
+						LEFT OUTER JOIN
+							(
+								SELECT
+									config_id,
+									col_type,
+									effect_time,
+									point
+								FROM
+									fdm.fdm_popvender_shop_category_version_cost_chain
+								WHERE
+									dp = 'ACTIVE'
+							)
+							con
+						ON
+							cat.id = config_id
+						WHERE
+							cat.dp = 'ACTIVE'
+							AND YEAR(con.effect_time) >= 2015
+					)
+					a
+			)
+			c
+		WHERE
+			rank = 1
+	)
+	reb_def ON skud.item_third_cate_cd = reb_def.category_id
+	AND skud.belong_area = reb_def.belong_area
+WHERE
+	skud.dt BETWEEN reb_def.begin_time AND reb_def.end_time
